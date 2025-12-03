@@ -10,6 +10,8 @@ Args:
     --name          Dataset name used for the output filenames.
 """
 
+import pandas
+import numpy as np
 import argparse
 import gzip
 import os
@@ -53,6 +55,10 @@ def parse_fcs_to_dataframe(raw_gz_path: str):
 
     return data
 
+# parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Levine_13dim.fcs")
+# parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Levine_13dim_notransform.fcs.gz")
+# parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Samusik_01.fcs.gz")
+# parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_WNV.fcs.gz")
 
 def parse_label_lines(label_text: str, expected_count: int, source: str) -> List[str]:
     labels = [line.strip() for line in label_text.splitlines() if line.strip()]
@@ -109,7 +115,6 @@ def apply_labels(label_gz_path: str, df):
     df.columns = labels
     return df
 
-
 def split_features_and_labels(df) -> Tuple:
     """
     Split the loaded dataframe into features and labels if a label column exists.
@@ -125,6 +130,33 @@ def split_features_and_labels(df) -> Tuple:
     labels = df[label_col]
     features = df.drop(columns=[label_col])
     return features, labels
+
+def train_test_split(df, labels, seed, test_size=0.2):
+    """
+    Split features and labels into train/test subsets.
+
+    Returns:
+        features_train, labels_train, features_test, labels_test
+    """
+    n = df.shape[0]
+    rng = np.random.default_rng(seed)
+    indices = np.arange(n)
+    rng.shuffle(indices)
+
+    split = int(n * (1 - test_size))
+    train_idx = indices[:split]
+    test_idx = indices[split:]
+
+    features_train = df.iloc[train_idx].reset_index(drop=True)
+    features_test = df.iloc[test_idx].reset_index(drop=True)
+
+    if labels is not None:
+        labels_train = labels.iloc[train_idx].reset_index(drop=True)
+        labels_test = labels.iloc[test_idx].reset_index(drop=True)
+    else:
+        labels_train = labels_test = None
+
+    return features_train, labels_train, features_test, labels_test
 
 
 def parse_args() -> argparse.ArgumentParser:
@@ -153,6 +185,13 @@ def parse_args() -> argparse.ArgumentParser:
         default="dataset",
         help="Dataset name used for output filename.",
     )
+    parser.add_argument(
+    "--seed",
+    type=int,
+    default=0,
+    help="Random seed used for train/test split.",
+    )
+
     return parser
 
 
@@ -168,14 +207,38 @@ def main(argv: Iterable[str] = None):
     data_df = parse_fcs_to_dataframe(raw_path)
     data_df = apply_labels(label_path, data_df)
     features_df, labels = split_features_and_labels(data_df)
+    features_train, labels_train, features_test, labels_test = train_test_split(features_df, labels, seed=args.seed)
 
     os.makedirs(output_dir, exist_ok=True)
-    data_output_path = os.path.join(output_dir, f"{name}.matrix.gz")
-    features_df.to_csv(data_output_path, index=False, compression="gzip")
 
-    if labels is not None:
-        label_output_path = os.path.join(output_dir, f"{name}.true_labels.gz")
-        labels.to_csv(label_output_path, index=False, header=False, compression="gzip")
+    # Training set
+    features_train.to_csv(
+        os.path.join(output_dir, f"{name}.train.matrix.gz"),
+        index=False,
+        compression="gzip",
+    )
+    
+    if labels_train is not None:
+        labels_train.to_csv(
+            os.path.join(output_dir, f"{name}.train.labels.gz"),
+            index=False,
+            header=False,
+            compression="gzip",
+        )
+
+    # Test set
+    features_test.to_csv(
+        os.path.join(output_dir, f"{name}.test.matrix.gz"),
+        index=False,
+        compression="gzip",
+    )
+    if labels_test is not None:
+        labels_test.to_csv(
+            os.path.join(output_dir, f"{name}.test.labels.gz"),
+            index=False,
+            header=False,
+            compression="gzip",
+        )
 
 
 if __name__ == "__main__":
