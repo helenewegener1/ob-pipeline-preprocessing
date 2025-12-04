@@ -17,7 +17,9 @@ import gzip
 import os
 import shutil
 import sys
+import tarfile
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
@@ -88,8 +90,20 @@ def detect_label_format(label_path: str, label_text: str) -> str:
 
 
 def is_flowjo_workspace(path: str) -> bool:
-    suffixes = {s.lower() for s in Path(path).suffixes}
-    return ".wps" in suffixes or ".wsp" in suffixes
+    suffixes = [s.lower() for s in Path(path).suffixes]
+    suffixes = [s for s in suffixes if s not in {".gz", ".zip"}]
+    if ".wps" in suffixes or ".wsp" in suffixes:
+        return True
+
+    try:
+        sample = read_bytes_handling_gzip(path)
+        text = sample[:2048].decode("utf-8", errors="ignore").lower()
+        if "<workspace" in text and "flowjo" in text:
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 def apply_labels(label_gz_path: str, df):
@@ -153,6 +167,37 @@ def collect_fcs_inputs(raw_input: str) -> List[Path]:
     return [path]
 
 
+def is_tar_archive(path: Path) -> bool:
+    """Return True if the provided path points to a tar (or tar.gz) archive."""
+    if not path.is_file():
+        return False
+    try:
+        return tarfile.is_tarfile(path)
+    except (OSError, tarfile.TarError):
+        return False
+
+
+@contextmanager
+def extract_fcs_from_tar(tar_path: Path) -> Iterable[List[Path]]:
+    """
+    Extract FCS files from a tar/tar.gz archive into a temporary directory and yield their paths.
+    """
+    tmp_dir = tempfile.TemporaryDirectory()
+    try:
+        with tarfile.open(tar_path, mode="r:*") as tar:
+            members = [m for m in tar.getmembers() if m.name.lower().endswith(".fcs")]
+            if not members:
+                raise FileNotFoundError(f"No FCS files found in archive: {tar_path}")
+            extracted: List[Path] = []
+            for member in members:
+                tar.extract(member, path=tmp_dir.name, filter="data")
+                extracted.append(Path(tmp_dir.name) / member.name)
+        yield sorted(extracted)
+    finally:
+        tmp_dir.cleanup()
+
+
+@contextmanager
 def prepared_fcs_paths(fcs_paths: Sequence[Path]) -> Iterable[List[Path]]:
     """
     Ensure every FCS is an on-disk uncompressed file so FlowJo parsers can load them.
@@ -178,17 +223,72 @@ def prepared_fcs_paths(fcs_paths: Sequence[Path]) -> Iterable[List[Path]]:
         tmp_dir.cleanup()
 
 
+@contextmanager
+def prepared_fcs_inputs(raw_input: str) -> Iterable[List[Path]]:
+    """
+    Load FCS inputs from a path that may be a single file, directory, or tar/tar.gz archive.
+    Yields ready-to-use uncompressed FCS paths and handles cleanup.
+    """
+    raw_path = Path(raw_input)
+    if raw_path.is_file() and is_tar_archive(raw_path):
+        with extract_fcs_from_tar(raw_path) as extracted:
+            with prepared_fcs_paths(extracted) as ready:
+                yield ready
+        return
+
+    fcs_paths = collect_fcs_inputs(raw_input)
+    with prepared_fcs_paths(fcs_paths) as ready:
+        yield ready
+
+
+def _flowjo_leaf_gate_paths(
+    workspace, sample_id: str
+) -> List[Tuple[str, Tuple[str, ...]]]:
+    """
+    Return (gate_name, gate_path) pairs for leaf gates for the given sample.
+    """
+    gate_records = [
+        (name, tuple(path)) for name, path in workspace.get_gate_ids(sample_id)
+    ]
+    gate_full_paths = [
+        (name, ancestors, ancestors + (name,)) for name, ancestors in gate_records
+    ]
+
+    def is_prefix(prefix: Tuple[str, ...], candidate: Tuple[str, ...]) -> bool:
+        return len(prefix) <= len(candidate) and candidate[: len(prefix)] == prefix
+
+    leaves: List[Tuple[str, Tuple[str, ...]]] = []
+    for name, ancestors, full_path in gate_full_paths:
+        has_child = any(
+            is_prefix(full_path, other_full) and other_full != full_path
+            for _, _, other_full in gate_full_paths
+        )
+        if not has_child:
+            leaves.append((name, ancestors))
+    return leaves
+
+
 def _flowjo_leaf_labels(
-    gating_result, leaves: Sequence[str], event_count: int
+    gating_result,
+    leaves: Sequence[Tuple[str, Optional[Sequence[str]]]],
+    event_count: int,
 ) -> pd.Series:
     """
     Convert FlowJo gating results into a label Series by assigning the leaf gate name to each event.
     Unassigned events are labeled 'unlabeled'.
     """
     labels = np.full(event_count, "unlabeled", dtype=object)
-    for gate_name in leaves:
+    for gate_name, gate_path in leaves:
         if hasattr(gating_result, "get_gate_membership"):
-            mask = gating_result.get_gate_membership(gate_name)
+            try:
+                if gate_path:
+                    mask = gating_result.get_gate_membership(
+                        gate_name, gate_path=tuple(gate_path)
+                    )
+                else:
+                    mask = gating_result.get_gate_membership(gate_name)
+            except TypeError:
+                mask = gating_result.get_gate_membership(gate_name)
         elif hasattr(gating_result, "get_population_mask"):
             mask = gating_result.get_population_mask(gate_name)
         else:
@@ -204,9 +304,7 @@ def label_samples_from_flowjo_workspace(
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Use a FlowJo workspace (.wsp/.wps) to gate a collection of FCS files and emit per-event labels.
-
-    The FlowJo file typically references original sample paths; we match samples by basename. A missing
-    FlowKit dependency raises a clear error.
+    A missing FlowKit dependency raises a clear error.
     """
     try:
         import flowkit as fk  # type: ignore
@@ -216,56 +314,39 @@ def label_samples_from_flowjo_workspace(
             "Install it (e.g., pip install flowkit) and re-run this step."
         ) from exc
 
-    workspace = fk.FlowJoWorkspace(workspace_path)
+    workspace = fk.Workspace(
+        workspace_path,
+        fcs_samples=[str(p) for p in fcs_paths],
+        ignore_missing_files=True,
+    )
+    workspace.analyze_samples(use_mp=True)
+
     feature_frames: List[pd.DataFrame] = []
     label_frames: List[pd.Series] = []
 
-    # Build a lookup of sample identifiers exposed by the workspace so we can find the matching gating strategy.
-    workspace_samples = {}
-    if hasattr(workspace, "sample_ids"):
-        workspace_samples = {sid: sid for sid in workspace.sample_ids}
-    elif hasattr(workspace, "samples") and isinstance(workspace.samples, dict):
-        workspace_samples = {sid: sid for sid in workspace.samples.keys()}
+    sample_ids = workspace.get_sample_ids()
+    try:
+        from tqdm import tqdm  # type: ignore
 
-    for fcs_path in fcs_paths:
-        sample_key = fcs_path.stem
-        matching_id: Optional[str] = None
-        for candidate in workspace_samples:
-            if (
-                Path(candidate).stem == sample_key
-                or Path(candidate).name == fcs_path.name
-            ):
-                matching_id = candidate
-                break
-        # Fall back to using the stem directly if FlowKit handles name resolution internally.
-        if matching_id is None:
-            matching_id = sample_key
+        iterator = tqdm(sample_ids, desc="FlowJo samples", unit="sample")
+    except Exception:
+        print(f"Processing {len(sample_ids)} FlowJo samples...", file=sys.stderr)
+        iterator = sample_ids
 
-        gating_strategy = workspace.get_gating_strategy(matching_id)
+    for sample_id in iterator:
+        gating_result = workspace.get_gating_results(sample_id)
+        if gating_result is None:
+            raise RuntimeError(f"No gating results produced for sample {sample_id}.")
 
-        sample = fk.Sample(str(fcs_path), sample_id=matching_id)
-        # FlowKit exposes either gate_sample function or method on gating strategy depending on version.
-        if hasattr(fk, "gate_sample"):
-            gating_result = fk.gate_sample(sample, gating_strategy)
-        elif hasattr(gating_strategy, "gate_sample"):
-            gating_result = gating_strategy.gate_sample(sample)
-        else:
+        leaf_gates = _flowjo_leaf_gate_paths(workspace, sample_id)
+        if not leaf_gates:
             raise RuntimeError(
-                "Unable to gate sample with FlowKit; expected gate_sample helper or method."
+                f"No leaf gates found in workspace for sample {sample_id}."
             )
 
-        leaf_gate_names: Sequence[str]
-        if hasattr(gating_strategy, "get_population_ids"):
-            leaf_gate_names = gating_strategy.get_population_ids(leaves_only=True)
-        elif hasattr(gating_strategy, "population_ids"):
-            leaf_gate_names = list(gating_strategy.population_ids)
-        else:
-            raise RuntimeError(
-                "FlowKit gating strategy missing population identifiers."
-            )
-
+        sample = workspace.get_sample(sample_id)
         if hasattr(sample, "as_dataframe"):
-            sample_df = sample.as_dataframe()
+            sample_df = sample.as_dataframe(source="raw")
         elif hasattr(sample, "data"):
             sample_df = pd.DataFrame(sample.data)
         else:
@@ -273,7 +354,7 @@ def label_samples_from_flowjo_workspace(
 
         label_series = _flowjo_leaf_labels(
             gating_result=gating_result,
-            leaves=leaf_gate_names,
+            leaves=leaf_gates,
             event_count=len(sample_df),
         )
 
@@ -283,6 +364,29 @@ def label_samples_from_flowjo_workspace(
     features_df = pd.concat(feature_frames, ignore_index=True)
     labels = pd.concat(label_frames, ignore_index=True)
     return features_df, labels
+
+
+@contextmanager
+def workspace_materialized(path: str) -> Iterable[str]:
+    """
+    FlowJo workspaces may be gzipped; materialize to disk if needed and yield the usable path.
+    """
+    suffixes = [s.lower() for s in Path(path).suffixes]
+    if suffixes and suffixes[-1] == ".gz":
+        with tempfile.NamedTemporaryFile(
+            suffix="".join(suffixes[:-1]) or ".wps", delete=False
+        ) as tmp:
+            tmp.write(read_bytes_handling_gzip(path))
+            tmp_path = tmp.name
+        try:
+            yield tmp_path
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    else:
+        yield path
 
 
 def split_features_and_labels(df) -> Tuple:
@@ -404,15 +508,23 @@ def main(argv: Iterable[str] = None):
     method = args.method
 
     if is_flowjo_workspace(label_path):
-        fcs_files = collect_fcs_inputs(raw_path)
-        with prepared_fcs_paths(fcs_files) as ready_fcs:
+        with (
+            prepared_fcs_inputs(raw_path) as ready_fcs,
+            workspace_materialized(label_path) as workspace_path,
+        ):
             features_df, labels = label_samples_from_flowjo_workspace(
-                label_path, ready_fcs
+                workspace_path, ready_fcs
             )
     else:
-        data_df = parse_fcs_to_dataframe(raw_path)
-        data_df = apply_labels(label_path, data_df)
-        features_df, labels = split_features_and_labels(data_df)
+        with prepared_fcs_inputs(raw_path) as ready_fcs:
+            if len(ready_fcs) != 1:
+                print(
+                    f"Warning: expected a single FCS input but found {len(ready_fcs)}; using the first file {ready_fcs[0]}.",
+                    file=sys.stderr,
+                )
+            data_df = parse_fcs_to_dataframe(str(ready_fcs[0]))
+            data_df = apply_labels(label_path, data_df)
+            features_df, labels = split_features_and_labels(data_df)
 
     os.makedirs(output_dir, exist_ok=True)
     (train_features, train_labels), (test_features, test_labels) = split_train_test(
