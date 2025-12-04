@@ -3,10 +3,8 @@ set -euo pipefail
 
 # Run data_preprocessing.py with the requested parameters.
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
-python_bin="${script_dir}/.venv/bin/python"
-[ -x "$python_bin" ] || python_bin="python"
 
-"${python_bin}" "${script_dir}/data_preprocessing.py" \
+python "${script_dir}/data_preprocessing.py" \
   --name "data_import" \
   --output_dir "${script_dir}/out/data/data_import/preprocessing/data_preprocessing/default" \
   --data.raw "${script_dir}/out/data/data_import/data_import.data.gz" \
