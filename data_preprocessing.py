@@ -218,7 +218,7 @@ def main(argv: Iterable[str] = None):
     output_dir = args.output_dir
     name = args.name
 
-    raw_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_ND.fcs"
+    # raw_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_ND.fcs"
 
     data_df = parse_fcs_to_dataframe(raw_path)
     data_df = replace_NAs(data_df)
@@ -229,8 +229,8 @@ def main(argv: Iterable[str] = None):
     features_train, labels_train = split_features_and_labels(train_set)
     features_test, labels_test = split_features_and_labels(test_set)
 
-    output_dir="/Users/srz223/Documents/courses/Benchmarking/out"
-    name = "covid"
+    # output_dir="/Users/srz223/Documents/courses/Benchmarking/out"
+    # name = "covid"
     os.makedirs(output_dir, exist_ok=True)
 
     # Training set
