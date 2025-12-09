@@ -198,17 +198,23 @@ def split_features_and_labels(df) -> Tuple:
 def parse_args() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Preprocess gzipped FCS data into CSV.")
     parser.add_argument(
-        "--data.raw",
+        "--raw_path",
         type=str,
         required=True,
-        help="Gz-compressed FCS data file.",
+        help="Link to FCS file.",
     )
-    parser.add_argument(
-        "--data.labels",
-        type=str,
-        required=True,
-        help="Gz-compressed labels file. Text replaces FCS headers; XML is not supported.",
-    )
+    # parser.add_argument(
+    #     "--data.raw",
+    #     type=str,
+    #     required=True,
+    #     help="Gz-compressed FCS data file.",
+    # )
+    # parser.add_argument(
+    #     "--data.labels",
+    #     type=str,
+    #     required=True,
+    #     help="Gz-compressed labels file. Text replaces FCS headers; XML is not supported.",
+    # )
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -235,8 +241,8 @@ def main(argv: Iterable[str] = None):
     parser = parse_args()
     args = parser.parse_args(argv)
     
-    raw_path = getattr(args, "raw_path")
-    # raw_path = args.raw_path
+    # raw_path = getattr(args, "raw_path")
+    raw_path = args.raw_path
     # raw_path = getattr(args, "data.raw")
     # label_path = getattr(args, "data.labels")
     output_dir = args.output_dir
