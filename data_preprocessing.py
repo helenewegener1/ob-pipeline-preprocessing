@@ -21,20 +21,41 @@ import tempfile
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
+import requests
+import gzip
 
-def read_bytes_handling_gzip(path: str) -> bytes:
-    """
-    Return file contents, transparently handling gzip-compressed files.
 
-    Some inputs may have a .gz suffix even when they are plain text; fall back to
-    normal reads if gzip decompression fails.
-    """
-    try:
-        with gzip.open(path, "rb") as fh:
-            return fh.read()
-    except (OSError, gzip.BadGzipFile):
-        with open(path, "rb") as fh:
-            return fh.read()
+# def read_bytes_handling_gzip(path: str) -> bytes:
+#     """
+#     Return file contents, transparently handling gzip-compressed files.
+
+#     Some inputs may have a .gz suffix even when they are plain text; fall back to
+#     normal reads if gzip decompression fails.
+#     """
+#     try:
+#         with gzip.open(path, "rb") as fh:
+#             return fh.read()
+#     except (OSError, gzip.BadGzipFile):
+#         with open(path, "rb") as fh:
+#             return fh.read()
+
+def read_bytes_handling_gzip(path_or_url: str) -> bytes:
+    """Reads plain or gzipped bytes from local file or URL."""
+    
+    # URL case
+    if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+        resp = requests.get(path_or_url)
+        resp.raise_for_status()
+        raw = resp.content
+    else:
+        with open(path_or_url, "rb") as f:
+            raw = f.read()
+
+    # Gunzip if needed
+    if path_or_url.endswith(".gz"):
+        return gzip.decompress(raw)
+    else:
+        return raw
 
 
 def parse_fcs_to_dataframe(raw_gz_path: str):
@@ -54,6 +75,7 @@ def parse_fcs_to_dataframe(raw_gz_path: str):
             pass  # If cleanup fails, we still want to return the parsed data/error.
 
     return data
+
 
 # parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_WNV.fcs")
 # parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_ND.fcs")
@@ -212,14 +234,16 @@ def parse_args() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] = None):
     parser = parse_args()
     args = parser.parse_args(argv)
-
-    raw_path = getattr(args, "data.raw")
-    label_path = getattr(args, "data.labels")
+    
+    raw_path = getattr(args, "raw_path")
+    # raw_path = args.raw_path
+    # raw_path = getattr(args, "data.raw")
+    # label_path = getattr(args, "data.labels")
     output_dir = args.output_dir
     name = args.name
 
     # raw_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_ND.fcs"
-
+    # raw_path = "https://raw.githubusercontent.com/kaae-2/ob-flow-datasets/main/data/FlowCAP_ND.fcs.gz"
     data_df = parse_fcs_to_dataframe(raw_path)
     data_df = replace_NAs(data_df)
     samples_unique = get_unique_samples(data_df)
