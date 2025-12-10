@@ -20,6 +20,7 @@ fcs_data <- read.FCS(fcs_file, transformation = FALSE, emptyValue = TRUE, trunca
 # Get expression matrix from fcs file
 exprs <- fcs_data@exprs
 head(exprs)
+exprs[, colnames(exprs) == "label"] %>% unique()
 
 # colnames1 <- colnames(exprs)
 # colnames2 <- colnames(exprs)

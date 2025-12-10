@@ -138,7 +138,9 @@ def replace_NAs(df):
     """
     Replace NAs of label column to ""
     """
-    df["label"] = df["label"].fillna(99)
+    max_label = df["label"].dropna().max()
+    unassigned_class = max_label + 1
+    df["label"] = df["label"].fillna(unassigned_class)
 
     return df
 
