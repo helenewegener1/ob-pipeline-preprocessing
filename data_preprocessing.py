@@ -213,7 +213,7 @@ def split_features_and_labels(df) -> Tuple:
 #     features = df.drop(columns=[label_col])
 #     return features, labels
 
-def train_test_split(df, labels, seed, test_size=0.2):
+def train_test_split(df, labels, seed, test_size=0.8):
     """
     Split features and labels into train/test subsets.
 
