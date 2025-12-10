@@ -240,12 +240,12 @@ def train_test_split(df, labels, seed, test_size=0.2):
 
 def parse_args() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Preprocess gzipped FCS data into CSV.")
-    parser.add_argument(
-        "--raw_path",
-        type=str,
-        required=True,
-        help="Link to FCS file.",
-    )
+    # parser.add_argument(
+    #     "--raw_path",
+    #     type=str,
+    #     required=True,
+    #     help="Link to FCS file.",
+    # )
     parser.add_argument(
         "--data.raw",
         type=str,
@@ -285,7 +285,7 @@ def main(argv: Iterable[str] = None):
     parser = parse_args()
     args = parser.parse_args(argv)
 
-    raw_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Levine_13dim_notransform.fcs.gz"
+    # raw_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Levine_13dim_notransform.fcs.gz"
     raw_path = getattr(args, "data.raw")
     label_path = getattr(args, "data.labels")
     output_dir = args.output_dir
