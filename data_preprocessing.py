@@ -78,7 +78,7 @@ def parse_fcs_to_dataframe(raw_gz_path: str):
 
 # parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_WNV.fcs")
 # parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_ND.fcs")
-parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Levine_13dim_notransform.fcs.gz")
+# parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Levine_13dim_notransform.fcs.gz")
 
 def parse_label_lines(label_text: str, expected_count: int, source: str) -> List[str]:
     labels = [line.strip() for line in label_text.splitlines() if line.strip()]
