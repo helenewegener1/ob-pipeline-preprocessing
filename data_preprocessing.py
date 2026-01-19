@@ -27,6 +27,15 @@ import fcsparser
 import numpy as np
 import pandas as pd
 
+# Ensure multiprocessing uses spawn to avoid fork-related deadlocks with native extensions.
+try:
+    import multiprocessing as _mp
+
+    _mp.set_start_method("spawn", force=True)
+except Exception:
+    # If the start method is already set or unsupported, continue without failing.
+    pass
+
 
 def read_bytes_handling_gzip(path: str) -> bytes:
     """
@@ -314,11 +323,18 @@ def label_samples_from_flowjo_workspace(
             "Install it (e.g., pip install flowkit) and re-run this step."
         ) from exc
 
-    workspace = fk.Workspace(
-        workspace_path,
-        fcs_samples=[str(p) for p in fcs_paths],
-        ignore_missing_files=True,
-    )
+    try:
+        workspace = fk.Workspace(
+            workspace_path,
+            fcs_samples=[str(p) for p in fcs_paths],
+            ignore_missing_files=True,
+        )
+    except TypeError:
+        # Older/newer flowkit versions may not accept ignore_missing_files; fall back.
+        workspace = fk.Workspace(
+            workspace_path,
+            fcs_samples=[str(p) for p in fcs_paths],
+        )
     workspace.analyze_samples(use_mp=True)
 
     feature_frames: List[pd.DataFrame] = []
