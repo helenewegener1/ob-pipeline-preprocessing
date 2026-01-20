@@ -21,7 +21,7 @@ import tarfile
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import fcsparser
 import numpy as np
@@ -335,7 +335,10 @@ def label_samples_from_flowjo_workspace(
             workspace_path,
             fcs_samples=[str(p) for p in fcs_paths],
         )
-    workspace.analyze_samples(use_mp=True)
+    try:
+        workspace.analyze_samples(use_mp=False)
+    except TypeError:
+        workspace.analyze_samples()
 
     feature_frames: List[pd.DataFrame] = []
     label_frames: List[pd.Series] = []
@@ -412,17 +415,151 @@ def split_features_and_labels(df) -> Tuple:
     The column named 'label' (case-insensitive) is treated as the target vector.
     Returns (features_df, labels_series_or_None).
     """
-    label_col = next((c for c in df.columns if c.lower() == "label"), None)
+    label_col = find_label_column(df)
     if label_col is None:
         print(
-            "Warning: no label column found; writing all data as features.",
+            "Warning: no label column found; labeling all rows as 'unlabeled'.",
             file=sys.stderr,
         )
-        return df, None
+        labels = pd.Series(["unlabeled"] * len(df), name="label")
+        return df, labels
 
     labels = df[label_col]
     features = df.drop(columns=[label_col])
     return features, labels
+
+
+LABEL_COLUMN_CANDIDATES = (
+    "label",
+    "population",
+    "cell_type",
+    "celltype",
+    "cluster",
+    "cluster_id",
+)
+
+
+def find_label_column(df: pd.DataFrame) -> Optional[str]:
+    """Return the most likely label column name based on common conventions."""
+    lower_map = {str(col).strip().lower(): col for col in df.columns}
+    for candidate in LABEL_COLUMN_CANDIDATES:
+        if candidate in lower_map:
+            return lower_map[candidate]
+    return None
+
+
+def extract_labels_from_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
+    """Return (features, labels) using a heuristic label column selection."""
+    label_col = find_label_column(df)
+    if label_col is None:
+        labels = pd.Series(["unlabeled"] * len(df), name="label")
+        return df, labels
+    labels = df[label_col]
+    features = df.drop(columns=[label_col])
+    return features, labels
+
+
+def build_label_key(labels: Sequence[pd.Series]) -> Dict[int, str]:
+    """Build a stable id_to_label mapping using 1-indexed ids and 0 for unlabeled."""
+    label_set = set()
+    for series in labels:
+        if series is None:
+            continue
+        values = series.dropna().astype(str).str.strip()
+        for value in values:
+            if not value:
+                continue
+            if value.lower() == "unlabeled":
+                continue
+            label_set.add(value)
+    ordered = sorted(label_set)
+    return {idx + 1: label for idx, label in enumerate(ordered)}
+
+
+def map_labels_to_ints(
+    labels: pd.Series, id_to_label: Dict[int, str]
+) -> pd.Series:
+    """Map string labels to integer ids using id_to_label; unlabeled -> 0."""
+    label_to_id = {label: idx for idx, label in id_to_label.items()}
+    mapped: List[int] = []
+    for value in labels:
+        if pd.isna(value):
+            mapped.append(0)
+            continue
+        text = str(value).strip()
+        if not text or text.lower() == "unlabeled":
+            mapped.append(0)
+            continue
+        mapped.append(label_to_id.get(text, 0))
+    return pd.Series(mapped, name="label")
+
+
+def label_samples_from_flowjo_workspace_by_sample(
+    workspace_path: str, fcs_paths: Sequence[Path]
+) -> Dict[str, Tuple[pd.DataFrame, pd.Series]]:
+    """Return per-sample features/labels using FlowJo workspace gating."""
+    try:
+        import flowkit as fk  # type: ignore
+    except ImportError as exc:
+        raise ImportError(
+            "FlowJo workspace inputs require the 'flowkit' package. "
+            "Install it (e.g., pip install flowkit) and re-run this step."
+        ) from exc
+
+    try:
+        workspace = fk.Workspace(
+            workspace_path,
+            fcs_samples=[str(p) for p in fcs_paths],
+            ignore_missing_files=True,
+        )
+    except TypeError:
+        workspace = fk.Workspace(
+            workspace_path,
+            fcs_samples=[str(p) for p in fcs_paths],
+        )
+    try:
+        workspace.analyze_samples(use_mp=False)
+    except TypeError:
+        workspace.analyze_samples()
+
+    per_sample: Dict[str, Tuple[pd.DataFrame, pd.Series]] = {}
+    sample_ids = workspace.get_sample_ids()
+    try:
+        from tqdm import tqdm  # type: ignore
+
+        iterator = tqdm(sample_ids, desc="FlowJo samples", unit="sample")
+    except Exception:
+        print(f"Processing {len(sample_ids)} FlowJo samples...", file=sys.stderr)
+        iterator = sample_ids
+
+    for sample_id in iterator:
+        gating_result = workspace.get_gating_results(sample_id)
+        if gating_result is None:
+            raise RuntimeError(f"No gating results produced for sample {sample_id}.")
+
+        leaf_gates = _flowjo_leaf_gate_paths(workspace, sample_id)
+        if not leaf_gates:
+            raise RuntimeError(
+                f"No leaf gates found in workspace for sample {sample_id}."
+            )
+
+        sample = workspace.get_sample(sample_id)
+        if hasattr(sample, "as_dataframe"):
+            sample_df = sample.as_dataframe(source="raw")
+        elif hasattr(sample, "data"):
+            sample_df = pd.DataFrame(sample.data)
+        else:
+            raise RuntimeError("FlowKit sample object does not expose data accessors.")
+
+        label_series = _flowjo_leaf_labels(
+            gating_result=gating_result,
+            leaves=leaf_gates,
+            event_count=len(sample_df),
+        )
+
+        per_sample[str(sample_id)] = (sample_df, label_series)
+
+    return per_sample
 
 
 def split_train_test(
