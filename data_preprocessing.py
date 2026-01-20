@@ -12,6 +12,8 @@ Args:
     --method        Train/test split method (only 'default' is supported today).
 """
 
+import pandas
+import numpy as np
 import argparse
 import gzip
 import os
@@ -27,7 +29,6 @@ import fcsparser
 import numpy as np
 import pandas as pd
 
-
 def read_bytes_handling_gzip(path: str) -> bytes:
     """
     Return file contents, transparently handling gzip-compressed files.
@@ -41,6 +42,27 @@ def read_bytes_handling_gzip(path: str) -> bytes:
     except (OSError, gzip.BadGzipFile):
         with open(path, "rb") as fh:
             return fh.read()
+
+
+# import requests
+# import gzip
+# def read_bytes_handling_gzip(path_or_url: str) -> bytes:
+#     """Reads plain or gzipped bytes from local file or URL."""
+    
+#     # URL case
+#     if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+#         resp = requests.get(path_or_url)
+#         resp.raise_for_status()
+#         raw = resp.content
+#     else:
+#         with open(path_or_url, "rb") as f:
+#             raw = f.read()
+
+#     # Gunzip if needed
+#     if path_or_url.endswith(".gz"):
+#         return gzip.decompress(raw)
+#     else:
+#         return raw
 
 
 def parse_fcs_to_dataframe(raw_gz_path: str):
@@ -62,6 +84,10 @@ def parse_fcs_to_dataframe(raw_gz_path: str):
     return data
 
 
+# parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_WNV.fcs")
+# parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/FlowCAP_ND.fcs")
+# parse_fcs_to_dataframe(raw_gz_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Levine_13dim_notransform.fcs.gz")
+
 def parse_label_lines(label_text: str, expected_count: int, source: str) -> List[str]:
     labels = [line.strip() for line in label_text.splitlines() if line.strip()]
     if not labels:
@@ -72,7 +98,6 @@ def parse_label_lines(label_text: str, expected_count: int, source: str) -> List
             f"Label count ({len(labels)}) does not match number of columns ({expected_count})."
         )
     return labels
-
 
 def detect_label_format(label_path: str, label_text: str) -> str:
     """Return 'txt' or 'xml' based on path suffix or content."""
@@ -140,6 +165,15 @@ def apply_labels(label_gz_path: str, df):
     df.columns = labels
     return df
 
+def replace_NAs(df):
+    """
+    Replace NAs of label column to ""
+    """
+    max_label = df["label"].dropna().max()
+    unassigned_class = max_label + 1
+    df["label"] = df["label"].fillna(unassigned_class)
+
+    return df
 
 def collect_fcs_inputs(raw_input: str) -> List[Path]:
     """
@@ -408,6 +442,85 @@ def split_features_and_labels(df) -> Tuple:
     features = df.drop(columns=[label_col])
     return features, labels
 
+# def get_unique_samples(df):
+#     samples_unique = df["sample"].unique()
+
+#     return samples_unique
+
+# def train_test_sample_split(df, samples_unique):
+#     """
+#     Split features and labels into train/test subsets based on sample column + eliminate sample column after this.
+
+#     For now, we are testing on the first sample.
+
+#     Returns:    
+#         train_set, test_set
+#     """
+
+#     training_sample = samples_unique[0]
+
+#     train_set = df[df["sample"] == training_sample]
+#     test_set = df[df["sample"] != training_sample]
+
+#     nrow_df = df.shape[0]
+#     nrow_train = train_set.shape[0]
+#     nrow_test = test_set.shape[0]
+
+#     if nrow_train + nrow_test != nrow_df:
+#         print(
+#             "Rows in training or test set do not match the original dataset.",
+#             file=sys.stderr,
+#         )
+
+#     # remove sample column
+#     train_set = train_set.drop("sample", axis=1)
+#     test_set = test_set.drop("sample", axis=1)
+
+#     return train_set, test_set
+
+# def split_features_and_labels(df) -> Tuple:
+#     """
+#     Split the loaded dataframe into features and labels if a label column exists.
+
+#     The column named 'label' (case-insensitive) is treated as the target vector.
+#     Returns (features_df, labels_series_or_None).
+#     """
+
+#     label_col = next((c for c in df.columns if c.lower() == "label"), None)
+#     if label_col is None:
+#         print("Warning: no label column found; writing all data as features.", file=sys.stderr)
+#         return df, None
+
+#     labels = df[label_col]
+#     features = df.drop(columns=[label_col])
+#     return features, labels
+
+def train_test_split(df, labels, seed, test_size=0.8):
+    """
+    Split features and labels into train/test subsets.
+
+    Returns:
+        features_train, labels_train, features_test, labels_test
+    """
+    n = df.shape[0]
+    rng = np.random.default_rng(seed)
+    indices = np.arange(n)
+    rng.shuffle(indices)
+
+    split = int(n * (1 - test_size))
+    train_idx = indices[:split]
+    test_idx = indices[split:]
+
+    features_train = df.iloc[train_idx].reset_index(drop=True)
+    features_test = df.iloc[test_idx].reset_index(drop=True)
+
+    if labels is not None:
+        labels_train = labels.iloc[train_idx].reset_index(drop=True)
+        labels_test = labels.iloc[test_idx].reset_index(drop=True)
+    else:
+        labels_train = labels_test = None
+
+    return features_train, labels_train, features_test, labels_test
 
 def split_train_test(
     features_df: pd.DataFrame,
@@ -497,58 +610,75 @@ def parse_args() -> argparse.ArgumentParser:
 
 
 def main(argv: Iterable[str] = None):
+
     parser = parse_args()
     args = parser.parse_args(argv)
 
+    # raw_path = "/Users/srz223/Documents/courses/Benchmarking/repos/ob-flow-datasets/data/Levine_13dim_notransform.fcs.gz"
     raw_path = getattr(args, "data.raw")
     label_path = getattr(args, "data.labels")
     output_dir = args.output_dir
     name = args.name
-    seed = args.seed
-    method = args.method
 
-    if is_flowjo_workspace(label_path):
-        with (
-            prepared_fcs_inputs(raw_path) as ready_fcs,
-            workspace_materialized(label_path) as workspace_path,
-        ):
-            features_df, labels = label_samples_from_flowjo_workspace(
-                workspace_path, ready_fcs
-            )
-    else:
-        with prepared_fcs_inputs(raw_path) as ready_fcs:
-            if len(ready_fcs) != 1:
-                print(
-                    f"Warning: expected a single FCS input but found {len(ready_fcs)}; using the first file {ready_fcs[0]}.",
-                    file=sys.stderr,
-                )
-            data_df = parse_fcs_to_dataframe(str(ready_fcs[0]))
-            data_df = apply_labels(label_path, data_df)
-            features_df, labels = split_features_and_labels(data_df)
+    data_df = parse_fcs_to_dataframe(raw_path)
+    data_df = replace_NAs(data_df)
+    data_df = apply_labels(label_path, data_df)
+    features_df, labels = split_features_and_labels(data_df)
+    features_train, labels_train, features_test, labels_test = train_test_split(features_df, labels, seed=args.seed)
 
+    # parser = parse_args()
+    # args = parser.parse_args(argv)
+    
+    # # raw_path = getattr(args, "raw_path")
+    # # raw_path = args.raw_path
+    # raw_path = getattr(args, "data.raw")
+    # label_path = getattr(args, "data.labels")
+    # output_dir = args.output_dir
+    # name = args.name
+
+    
+    # # raw_path = "https://raw.githubusercontent.com/kaae-2/ob-flow-datasets/main/data/FlowCAP_ND.fcs.gz"
+    # data_df = parse_fcs_to_dataframe(raw_path)
+    # data_df = replace_NAs(data_df)
+    # # samples_unique = get_unique_samples(data_df)
+    # # train_set, test_set = train_test_sample_split(data_df, samples_unique)
+    # features_train, labels_train, features_test, labels_test = train_test_split(data_df, labels, seed, test_size=0.2)
+
+    # data_df = apply_labels(label_path, data_df)
+    # features_train, labels_train = split_features_and_labels(train_set)
+    # features_test, labels_test = split_features_and_labels(test_set)
+
+    # output_dir="/Users/srz223/Documents/courses/Benchmarking/out"
+    # name = "covid"
     os.makedirs(output_dir, exist_ok=True)
-    (train_features, train_labels), (test_features, test_labels) = split_train_test(
-        features_df, labels, method=method, seed=seed
+
+    # Training set
+    features_train.to_csv(
+        os.path.join(output_dir, f"{name}.train.matrix.gz"),
+        index=False,
+        compression="gzip",
     )
-
-    # Test split keeps the legacy filenames for downstream compatibility.
-    test_data_output_path = os.path.join(output_dir, f"{name}.matrix.gz")
-    test_features.to_csv(test_data_output_path, index=False, compression="gzip")
-    if test_labels is not None:
-        test_label_output_path = os.path.join(output_dir, f"{name}.true_labels.gz")
-        test_labels.to_csv(
-            test_label_output_path, index=False, header=False, compression="gzip"
+    
+    if labels_train is not None:
+        labels_train.to_csv(
+            os.path.join(output_dir, f"{name}.train.labels.gz"),
+            index=False,
+            header=False,
+            compression="gzip",
         )
 
-    # Training split uses the new suffixes.
-    train_data_output_path = os.path.join(output_dir, f"{name}.matrix.training.gz")
-    train_features.to_csv(train_data_output_path, index=False, compression="gzip")
-    if train_labels is not None:
-        train_label_output_path = os.path.join(
-            output_dir, f"{name}.true_labels.training.gz"
-        )
-        train_labels.to_csv(
-            train_label_output_path, index=False, header=False, compression="gzip"
+    # Test set
+    features_test.to_csv(
+        os.path.join(output_dir, f"{name}.test.matrix.gz"),
+        index=False,
+        compression="gzip",
+    )
+    if labels_test is not None:
+        labels_test.to_csv(
+            os.path.join(output_dir, f"{name}.test.labels.gz"),
+            index=False,
+            header=False,
+            compression="gzip",
         )
 
 

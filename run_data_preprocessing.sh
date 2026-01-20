@@ -1,11 +1,6 @@
-#!/usr/bin/env bash
-set -euo pipefail
 
-# Run data_preprocessing.py with the requested parameters.
-script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+bash data_preprocessing.sh \
+  --data_path /home/projects/dp_immunoth/data/benchmark_flow/FR-FCM-Z2KP/FR-FCM-Z2KP_healthy_final \
+  --output_dir /home/projects/dp_immunoth/people/helweg/projects/benchmarking/ob-pipeline-preprocessing/test \
+  --seed 42 
 
-python "${script_dir}/data_preprocessing.py" \
-  --name "data_import" \
-  --output_dir "${script_dir}/out/data/data_import/preprocessing/data_preprocessing/default" \
-  --data.raw "${script_dir}/out/data/data_import/data_import.data.gz" \
-  --data.labels "${script_dir}/out/data/data_import/data_import.input_labels.gz"
