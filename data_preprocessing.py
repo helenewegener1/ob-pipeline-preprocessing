@@ -567,6 +567,7 @@ def split_train_test(
     labels: Optional[pd.Series],
     method: str,
     seed: int,
+    test_sample_limit: Optional[int] = None,
     test_fraction: float = 0.2,
 ) -> Tuple[
     Tuple[pd.DataFrame, Optional[pd.Series]], Tuple[pd.DataFrame, Optional[pd.Series]]
@@ -599,10 +600,26 @@ def split_train_test(
     test_features = features_df.iloc[test_idx]
 
     if labels is None:
-        return (train_features, None), (test_features, None)
+        train_labels = None
+        test_labels = None
+    else:
+        train_labels = labels.iloc[train_idx]
+        test_labels = labels.iloc[test_idx]
 
-    train_labels = labels.iloc[train_idx]
-    test_labels = labels.iloc[test_idx]
+    if test_sample_limit is not None:
+        if test_sample_limit <= 0:
+            raise ValueError("test-sample-limit must be a positive integer.")
+        if len(test_features) > test_sample_limit:
+            chosen = rng.choice(
+                np.arange(len(test_features)),
+                size=test_sample_limit,
+                replace=False,
+            )
+            chosen = np.sort(chosen)
+            test_features = test_features.iloc[chosen]
+            if test_labels is not None:
+                test_labels = test_labels.iloc[chosen]
+
     return (train_features, train_labels), (test_features, test_labels)
 
 
@@ -646,6 +663,12 @@ def parse_args() -> argparse.ArgumentParser:
         default="default",
         help="Train/test split method. Only 'default' is supported.",
     )
+    parser.add_argument(
+        "--test-sample-limit",
+        type=int,
+        default=None,
+        help="Limit number of test samples (random subset).",
+    )
     return parser
 
 
@@ -659,6 +682,7 @@ def main(argv: Iterable[str] = None):
     name = args.name
     seed = args.seed
     method = args.method
+    test_sample_limit = args.test_sample_limit
 
     if is_flowjo_workspace(label_path):
         with (
@@ -681,7 +705,11 @@ def main(argv: Iterable[str] = None):
 
     os.makedirs(output_dir, exist_ok=True)
     (train_features, train_labels), (test_features, test_labels) = split_train_test(
-        features_df, labels, method=method, seed=seed
+        features_df,
+        labels,
+        method=method,
+        seed=seed,
+        test_sample_limit=test_sample_limit,
     )
 
     # Test split keeps the legacy filenames for downstream compatibility.
